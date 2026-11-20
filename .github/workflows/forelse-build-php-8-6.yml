@@ -1,0 +1,111 @@
+name: 'Forelse: build PHP 8.6 binaries'
+
+# Temporary workflow on the Oipnet fork: builds the PHP 8.6 binaries for the
+# upstream PR (branch php-8-6-support) and pushes them to the
+# forelse-php-8-6-binaries branch. Not meant to be part of the upstream PR.
+
+on:
+    workflow_dispatch:
+    push:
+        branches: [forelse-build-php-8-6]
+
+permissions: {}
+
+jobs:
+    extensions:
+        runs-on: ubuntu-latest
+        timeout-minutes: 240
+        strategy:
+            fail-fast: false
+            matrix:
+                include:
+                    - { lib: intl, platform: node, jspi: 'yes' }
+                    - { lib: intl, platform: node, jspi: 'no' }
+                    - { lib: intl, platform: web, jspi: 'yes' }
+                    - { lib: intl, platform: web, jspi: 'no' }
+                    - { lib: xdebug, platform: node, jspi: 'yes' }
+                    - { lib: xdebug, platform: node, jspi: 'no' }
+                    - { lib: redis, platform: node, jspi: 'yes' }
+                    - { lib: memcached, platform: node, jspi: 'yes' }
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v5
+            - name: Free disk space
+              run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+            - uses: ./.github/actions/prepare-playground
+              with:
+                  node-version: 24
+            - name: Build ${{ matrix.lib }} (${{ matrix.platform }}, JSPI ${{ matrix.jspi }})
+              run: |
+                  args=(--LIBRARY=${{ matrix.lib }} --PLATFORM=${{ matrix.platform }} --PHP_VERSION=8.6)
+                  [ "${{ matrix.jspi }}" = yes ] && args+=(--JSPI=yes)
+                  node packages/php-wasm/compile/shared/build.js "${args[@]}"
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: ext-${{ matrix.lib }}-${{ matrix.platform }}-${{ matrix.jspi }}
+                  path: |
+                      packages/php-wasm/node-builds/8-6/*/extensions/
+                      packages/php-wasm/web-builds/8-6/*/extensions/
+                  if-no-files-found: error
+
+    php:
+        needs: extensions
+        runs-on: ubuntu-latest
+        timeout-minutes: 240
+        strategy:
+            fail-fast: false
+            matrix:
+                platform: [node, web]
+                jspi: ['yes', 'no']
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@v5
+            - name: Free disk space
+              run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
+            - uses: ./.github/actions/prepare-playground
+              with:
+                  node-version: 24
+            - uses: actions/download-artifact@v4
+              with:
+                  pattern: ext-*
+                  path: packages/php-wasm
+                  merge-multiple: true
+            - name: Build PHP 8.6 (${{ matrix.platform }}, JSPI ${{ matrix.jspi }})
+              run: |
+                  args=(--PLATFORM=${{ matrix.platform }} --PHP_VERSION=8.6)
+                  [ "${{ matrix.jspi }}" = yes ] && args+=(--WITH_JSPI=yes)
+                  node packages/php-wasm/compile/build.js "${args[@]}"
+            - uses: actions/upload-artifact@v4
+              with:
+                  name: php-${{ matrix.platform }}-${{ matrix.jspi }}
+                  path: |
+                      packages/php-wasm/${{ matrix.platform }}-builds/8-6/${{ matrix.jspi == 'yes' && 'jspi' || 'asyncify' }}/
+                      !packages/php-wasm/${{ matrix.platform }}-builds/8-6/*/extensions/
+                  if-no-files-found: error
+
+    publish:
+        needs: php
+        runs-on: ubuntu-latest
+        permissions:
+            contents: write
+        steps:
+            - uses: actions/checkout@v5
+            - uses: actions/download-artifact@v4
+              with:
+                  path: ${{ runner.temp }}/out
+                  merge-multiple: true
+            - name: Push the binaries to forelse-php-8-6-binaries
+              run: |
+                  set -euo pipefail
+                  git switch --orphan forelse-php-8-6-binaries
+                  git rm -rf --quiet . || true
+                  git clean -ffdx
+                  cp -a "$RUNNER_TEMP/out/." .
+                  find . -path ./.git -prune -o -type f -print | sort
+                  git add -A
+                  git config user.name "deployment_bot"
+                  git config user.email "deployment_bot@users.noreply.github.com"
+                  git commit -qm "PHP 8.6 binaries built by forelse-build-php-8-6 (${GITHUB_SHA})"
+                  git push --force origin HEAD:forelse-php-8-6-binaries
