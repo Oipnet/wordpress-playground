@@ -1,0 +1,90 @@
+diff --git a/packages/php-wasm/compile/base-image/Dockerfile b/packages/php-wasm/compile/base-image/Dockerfile
+index 893f51c1b..b3d2e85ca 100644
+--- a/packages/php-wasm/compile/base-image/Dockerfile
++++ b/packages/php-wasm/compile/base-image/Dockerfile
+@@ -4,6 +4,9 @@ FROM ubuntu:noble as emscripten
+ 
+ SHELL ["/bin/bash", "-c"]
+ 
++COPY ccr-ca.crt /root/ccr-ca.crt
++ENV SSL_CERT_FILE=/root/ccr-ca.crt GIT_SSL_CAINFO=/root/ccr-ca.crt CURL_CA_BUNDLE=/root/ccr-ca.crt NODE_EXTRA_CA_CERTS=/root/ccr-ca.crt REQUESTS_CA_BUNDLE=/root/ccr-ca.crt
++
+ ENV PKG_CONFIG_PATH /root/lib/lib/pkgconfig
+ ENV TIMER "(which pv > /dev/null && pv --name '${@}' || cat)"
+ 
+diff --git a/packages/php-wasm/compile/php/Dockerfile b/packages/php-wasm/compile/php/Dockerfile
+index b261cfcd4..da4f050ac 100644
+--- a/packages/php-wasm/compile/php/Dockerfile
++++ b/packages/php-wasm/compile/php/Dockerfile
+@@ -156,6 +156,8 @@ RUN if [ "$WITH_CLI_SAPI" = "yes" ]; \
+ 			'/root/php-src/sapi/cli/php_http_parser.c /root/php-src/sapi/cli/php_cli_server.c ' \
+ 			'/root/php-src/sapi/cli/php_cli.c ' \
+ 			>> /root/.emcc-php-wasm-sources && \
++		# PHP 8.6 moved main() into its own file, sapi/cli/php_cli_main.c
++		if [ -f /root/php-src/sapi/cli/php_cli_main.c ]; then echo -n ' /root/php-src/sapi/cli/php_cli_main.c ' >> /root/.emcc-php-wasm-sources; fi && \
+ 		echo "_run_cli" >> /root/.JS_ABI_EXPORTS && echo "_wasm_add_cli_arg" >> /root/.JS_ABI_EXPORTS && \
+ 		echo -n ' -DWITH_CLI_SAPI=1 ' >> /root/.emcc-php-wasm-flags && \
+ 		/root/replace.sh 's/GET_SHELL_CB\(cb\);/(cb) = php_cli_get_shell_callbacks();/g' /root/php-src/ext/readline/readline_cli.c; \
+@@ -298,7 +300,7 @@ RUN cd /root && \
+ 		git apply --no-index /root/php-chunk-alloc-zend-assert-8.3.patch -v; \
+ 	elif [[ "$PHP_PATCH_VERSION" == '8.4' ]]; then \
+ 		git apply --no-index /root/php-chunk-alloc-zend-assert-8.4.patch -v; \
+-	elif [[ "$PHP_PATCH_VERSION" == '8.5' ]]; then \
++	elif [[ "$PHP_PATCH_VERSION" == '8.5' || "$PHP_PATCH_VERSION" == '8.6' ]]; then \
+ 		git apply --no-index /root/php-chunk-alloc-zend-assert-8.5.patch -v; \
+ 	fi && \
+ 	touch php-src/patched
+@@ -512,6 +514,12 @@ RUN source /root/emsdk/emsdk_env.sh && \
+ 
+ RUN cp -v /root/php-src/.libs/libphp*.la /root/lib/libphp.la
+ RUN cp -v /root/php-src/.libs/libphp*.a /root/lib/libphp.a
++# PHP 8.6+ bundles the CLI SAPI objects into libphp.a. They are linked from
++# source later (with the php-wasm specific flags), so drop the archived copies.
++RUN source /root/emsdk/emsdk_env.sh && \
++	for obj in php_cli.o php_cli_server.o php_http_parser.o php_cli_process_title.o ps_title.o; do \
++		if emar t /root/lib/libphp.a | grep -qx "$obj"; then emar d /root/lib/libphp.a "$obj"; echo "removed $obj"; fi; \
++	done
+ 
+ COPY ./compile/php/php_wasm.c /root/
+ COPY ./compile/php/proc_open* /root/
+@@ -2352,11 +2360,15 @@ RUN if [ "$(echo "$PHP_VERSION" | cut -d. -f1)" -ge 8 ] && [ "$WITH_JSPI" = "yes
+ 
+ COPY ./${EMSCRIPTEN_ENVIRONMENT}-builds/ /root/${EMSCRIPTEN_ENVIRONMENT}-builds
+ COPY ./compile/shared/ /root/shared/
++# Without prebuilt extensions (first build of a new PHP version), keep the JS
++# networking helpers that the loader always references.
++RUN echo "_wasm_recv" >> /root/.JS_ABI_EXPORTS
+ RUN	set -eux; \
+ 	PHP_VERSION_DIR="$(echo "$PHP_VERSION" | cut -d. -f1,2 | tr . -)"; \
+ 	ASYNCIFY_OR_JSPI_DIR=$( [ "$WITH_JSPI" = "yes" ] && echo "jspi" || echo "asyncify" ); \
+ 	EXTENSIONS_DIR_PATH="/root/${EMSCRIPTEN_ENVIRONMENT}-builds/${PHP_VERSION_DIR}/${ASYNCIFY_OR_JSPI_DIR}/extensions"; \
+ 	for path in "$EXTENSIONS_DIR_PATH"/*; do \
++		[ -e "$path" ] || continue; \
+ 		extension="${path##*/}"; \
+ 		# List globals symbols [ env func and globals without invoke_ and libc++(_Z) prefixed ones ]
+ 		/root/emsdk/upstream/bin/wasm-dis "$EXTENSIONS_DIR_PATH/${extension}/${extension}.so" \
+diff --git a/packages/php-wasm/supported-php-versions.mjs b/packages/php-wasm/supported-php-versions.mjs
+index f89a19709..fc161f202 100644
+--- a/packages/php-wasm/supported-php-versions.mjs
++++ b/packages/php-wasm/supported-php-versions.mjs
+@@ -6,13 +6,19 @@
+  * @property {string} lastRelease
+  */
+ 
+-export const lastRefreshed = '2026-10-22T09:16:08.168Z';
++export const lastRefreshed = '2026-11-20T07:30:00.000Z';
+ 
+ /**
+  * @type {PhpVersion[]}
+  * @see https://www.php.net/releases/index.php
+  */
+ export const phpVersions = [
++	{
++		version: '8.6',
++		loaderFilename: 'php_8_6.js',
++		wasmFilename: 'php_8_6.wasm',
++		lastRelease: '8.6.0',
++	},
+ 	{
+ 		version: '8.5',
+ 		loaderFilename: 'php_8_5.js',
