@@ -14,6 +14,11 @@ export async function getXdebugExtensionModule(
 	version: SupportedPHPVersion = LatestSupportedPHPVersion
 ): Promise<any> {
 	switch (version) {
+		case '8.6':
+			// @ts-ignore
+			return (
+				await import('@php-wasm/node-8-6')
+			).getXdebugExtensionPath();
 		case '8.5':
 			// @ts-ignore
 			return (

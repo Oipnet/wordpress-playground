@@ -46,7 +46,7 @@ RUN source /root/emsdk/emsdk_env.sh && \
 	--disable-opcache \
 	--disable-phpdbg \
 	--without-pcre-jit \
-	--disable-cli \
+	$( [[ "${PHP_VERSION}" < "8.6" ]] && echo --disable-cli ) \
 	# PHP < 8.5
 	--disable-libxml \
 	--without-libxml \
@@ -68,7 +68,13 @@ RUN /root/replace.sh 's/defined\(__clang__\)/0/g' /root/php-src/Zend/zend_cpuinf
 
 RUN source /root/emsdk/emsdk_env.sh && \
 	cd /root/php-src && \
-	emmake make install
+	if [[ "${PHP_VERSION}" < "8.6" ]]; then \
+		emmake make install; \
+	else \
+		# PHP 8.6 always builds the CLI binary, which does not link here: only build
+		# libphp and install what phpize needs.
+		(emmake make -k || true) && emmake make install-headers install-build install-programs; \
+	fi
 
 # Copy extension headers that phpredis requires.
 # These headers are not installed by default during `make install`

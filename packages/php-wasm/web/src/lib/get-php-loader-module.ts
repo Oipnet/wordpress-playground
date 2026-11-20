@@ -23,6 +23,9 @@ export async function getPHPLoaderModule(
 	switch (version) {
 		case 'next':
 			return (await getPHPNextModule()).getPHPLoaderModule(asyncMode);
+		case '8.6':
+			// @ts-ignore
+			return (await import('@php-wasm/web-8-6')).getPHPLoaderModule();
 		case '8.5':
 			// @ts-ignore
 			return (await import('@php-wasm/web-8-5')).getPHPLoaderModule();

@@ -14,6 +14,9 @@ export async function getIntlExtensionModule(
 	version: SupportedPHPVersion = LatestSupportedPHPVersion
 ): Promise<any> {
 	switch (version) {
+		case '8.6':
+			// @ts-ignore
+			return (await import('@php-wasm/web-8-6')).getIntlExtensionPath();
 		case '8.5':
 			// @ts-ignore
 			return (await import('@php-wasm/web-8-5')).getIntlExtensionPath();
